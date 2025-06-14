@@ -4,7 +4,10 @@ from PIL import Image
 import matplotlib.patches as patches
 import random
 
-def build_category_table(category_list):
+from typing import Dict, Tuple
+
+
+def build_category_table(category_list: list[dict]) -> Dict[int, Dict]:
     """
     Convert `categories` from panoptic JSON into a lookup dict:
     {category_id: {"name", "color", "isthing"}}
@@ -19,7 +22,13 @@ def build_category_table(category_list):
     }
 
 
-def visualize_panoptic_target(image_path, target, category_table, alpha=0.5, figsize=(16, 10)):
+def visualize_panoptic_target(
+    image_path: str,
+    target: Dict,
+    category_table: Dict[int, Dict],
+    alpha: float = 0.5,
+    figsize: Tuple[int, int] = (16, 10)
+) -> Tuple[plt.Figure, plt.Axes]:
     """
     Visualize an image with panoptic segmentation target.
 
@@ -97,15 +106,14 @@ def visualize_panoptic_target(image_path, target, category_table, alpha=0.5, fig
 
 import os
 import json
-
+import random
 
 from build_maskrcnn_target import build_maskrcnn_target
 
-# Example paths
-img_path = 'Dataset/cityscapes/leftImg8bit/val/frankfurt/frankfurt_000001_010156_leftImg8bit.png'
-png_path = "Dataset/cityscapes/gtFine/cityscapes_panoptic_val/frankfurt_000001_010156_gtFine_panoptic.png"
-
 setname = 'val'
+d_panoptic_imgs = f'Dataset/cityscapes/gtFine/cityscapes_panoptic_{setname}'
+d_imgs = os.path.join('Dataset/cityscapes/leftImg8bit', setname)
+
 f_json = os.path.join('./Dataset/cityscapes/gtFine',
                       f'cityscapes_panoptic_{setname}.json',
                       )
@@ -115,18 +123,23 @@ with open(f_json) as f:
     panoptic_json = json.load(f)
 
 
-entry = None
-for idx, e in enumerate(panoptic_json['annotations']):
-    if e['file_name'] == os.path.basename(png_path):
-        print(f'[D] idx(entry) = {idx}')
-        entry = e
-assert(entry is not None)
-
-target = build_maskrcnn_target(png_path, entry["segments_info"])
-
-segment_ids = np.array(Image.open(png_path).convert("I"))
-import pdb; pdb.set_trace()
 category_table = build_category_table(panoptic_json["categories"])
-fig, ax = visualize_panoptic_target(img_path, target, category_table)
+datas = random.choices(panoptic_json['annotations'], k=3)
+
+for data in datas:
+    img_id = data['image_id']
+    print(f'[I] {img_id}')
+
+    png_path = os.path.join(d_panoptic_imgs, f'{img_id}_gtFine_panoptic.png')
+
+    case = img_id.split('_')[0]
+    img_path = os.path.join(d_imgs, case, f'{img_id}_leftImg8bit.png')
+    target = build_maskrcnn_target(png_path, data["segments_info"])
+
+    # import pdb; pdb.set_trace()
+    fig, ax = visualize_panoptic_target(img_path, 
+                                        target, 
+                                        category_table,
+                                        alpha=0.7)
 
 plt.show()

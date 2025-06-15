@@ -5,7 +5,54 @@ from torch.utils.data import Dataset
 from PIL import Image
 from typing import Callable, List, Tuple, Dict, Optional, Any
 
-from build_maskrcnn_target import build_maskrcnn_target
+def rgb2id(color):
+    """
+    Convert RGB-encoded panoptic image (uint8) to COCO-style segment IDs:
+    id = R + 256*G + 256*256*B
+    """
+    return (color[:, :, 0].astype(np.int32)
+            + color[:, :, 1].astype(np.int32) * 256
+            + color[:, :, 2].astype(np.int32) * 256 * 256)
+
+def build_maskrcnn_target(png_path, segments_info):
+    """
+    Build a Mask R-CNN style target dict from a COCO-formatted panoptic PNG + segments_info JSON.
+
+    Args:
+        png_path (str): Path to COCO-style panoptic PNG (RGB).
+        segments_info (list[dict]): List of segment metadata dicts.
+
+    Returns:
+        dict or None: {"boxes":[N,4],"labels":[N],"masks":[N,H,W]} or None if no segments.
+    """
+    pan_png = np.array(Image.open(png_path).convert("RGB"))
+    segment_ids = rgb2id(pan_png)
+    H, W = segment_ids.shape
+
+    boxes, labels, masks = [], [], []
+
+    for segment in segments_info:
+        sid = segment["id"]
+        cat = segment["category_id"]
+
+        mask = (segment_ids == sid).astype(np.uint8)
+        if mask.sum() == 0:
+            continue
+
+        labels.append(cat)
+        masks.append(mask)
+
+        ys, xs = np.where(mask)
+        boxes.append([xs.min(), ys.min(), xs.max(), ys.max()])
+
+    if not masks:
+        return None
+
+    return {
+        "boxes": torch.tensor(boxes, dtype=torch.float32),
+        "labels": torch.tensor(labels, dtype=torch.int64),
+        "masks": torch.tensor(np.stack(masks), dtype=torch.uint8),
+    }
 
 
 class CityscapesPanopticDataset(Dataset):

@@ -7,8 +7,7 @@ import matplotlib.patches as patches
 from PIL import Image
 from typing import Dict, Any, List, Tuple
 
-# from BriPanopticSeg.Data.CityscapesPanopticDataset import CityscapesPanopticDataset
-from Data.CityscapesPanopticDataset import CityscapesPanopticDataset
+from BriPanopticSeg.Data.CityscapesPanopticDataset import CityscapesPanopticDataset
 
 
 def build_category_table(categories: List[Dict[str, Any]]) -> Dict[int, Dict[str, Any]]:
@@ -25,7 +24,7 @@ def visualize_sample(
     image_tensor: Any,
     target: Dict[str, Any],
     category_table: Dict[int, Dict[str, Any]],
-    descrip: str='',
+    sample_idx: int
 ) -> None:
     image_np = (image_tensor.permute(1, 2, 0).numpy() * 255).astype(np.uint8)
     masks = target['masks'].numpy()
@@ -60,20 +59,28 @@ def visualize_sample(
             width, height = x2 - x1, y2 - y1
             rect = patches.Rectangle((x1, y1), width, height, linewidth=2, edgecolor=color, facecolor='none')
             ax.add_patch(rect)
+            text_x, text_y = x1, max(y1 - 5, 5)
+        else:
+            ys, xs = np.where(mask)
+            if len(xs) > 0 and len(ys) > 0:
+                text_x, text_y = int(xs.mean()), int(ys.mean())
+            else:
+                text_x, text_y = 10, 10 + i * 15
 
-        y_text = 20 + i * 15
         ax.text(
-            10, y_text, name,
-            color='white', fontsize=10, backgroundcolor='black'
+            text_x, text_y, name,
+            color=color, fontsize=10, backgroundcolor='white'
         )
 
-    blended = (0.6 * image_np + 0.4 * overlay).astype(np.uint8)
+    alpha = 0.8
+    blended = ((1.0 - alpha) * image_np + alpha * overlay).astype(np.uint8)
     ax.imshow(blended)
-    ax.set_title(f'{descrip}')
+    ax.set_title(f'Sample {sample_idx}')
     ax.axis('off')
+    return
 
 def test_cityscapes_dataset() -> None:
-    setname = 'val'
+    setname = 'train'
     d_panoptic_imgs = f'Dataset/cityscapes/gtFine/cityscapes_panoptic_{setname}'
     d_imgs = os.path.join('Dataset/cityscapes/leftImg8bit', setname)
 

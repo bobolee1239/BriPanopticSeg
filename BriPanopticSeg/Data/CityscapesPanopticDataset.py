@@ -14,7 +14,9 @@ def rgb2id(color):
             + color[:, :, 1].astype(np.int32) * 256
             + color[:, :, 2].astype(np.int32) * 256 * 256)
 
-def build_maskrcnn_target(png_path, segments_info):
+def build_maskrcnn_target(png_path, 
+                          segments_info,
+                          category_table,):
     """
     Build a Mask R-CNN style target dict from a COCO-formatted panoptic PNG + segments_info JSON.
 
@@ -39,7 +41,7 @@ def build_maskrcnn_target(png_path, segments_info):
         if mask.sum() == 0:
             continue
 
-        labels.append(cat)
+        labels.append(category_table[cat]['trainId'])
         masks.append(mask)
 
         ys, xs = np.where(mask)
@@ -53,6 +55,15 @@ def build_maskrcnn_target(png_path, segments_info):
         "labels": torch.tensor(labels, dtype=torch.int64),
         "masks": torch.tensor(np.stack(masks), dtype=torch.uint8),
     }
+
+
+def build_sem_seg_from_masks(masks, labels, height, width):
+    sem_seg = torch.zeros((height, width), dtype=torch.long)
+
+    for mask, label in zip(masks, labels):
+        sem_seg[mask.bool()] = label
+
+    return sem_seg
 
 
 class CityscapesPanopticDataset(Dataset):
@@ -72,12 +83,15 @@ class CityscapesPanopticDataset(Dataset):
         root_img_dir: str,
         root_panoptic_dir: str,
         panoptic_annotations: List[Dict[str, Any]],
+        category_table      : Dict[int, Dict[str, Any]],
         transform: Optional[Callable] = None,
     ) -> None:
         self._root_img_dir = root_img_dir
         self._root_panoptic_dir = root_panoptic_dir
         self._panoptic_annotations = panoptic_annotations
         self._transform = transform
+
+        self._category_table = category_table
         return
 
     def __len__(self) -> int:
@@ -103,6 +117,7 @@ class CityscapesPanopticDataset(Dataset):
         target: Optional[Dict[str, torch.Tensor]] = build_maskrcnn_target(
                                                         f_png,
                                                         annotation['segments_info'],
+                                                        self._category_table,
                                                         )
         if self._transform:
             image_np = np.array(image)
@@ -126,4 +141,11 @@ class CityscapesPanopticDataset(Dataset):
         else:
             image_tensor = torch.from_numpy(np.array(image)).permute(2, 0, 1).float() / 255.0
 
+        height, width = target['masks'].shape[1:]
+        sem_seg = build_sem_seg_from_masks(target['masks'], 
+                                           target['labels'], 
+                                           height,
+                                           width,
+                                           )
+        target['sem_seg'] = sem_seg
         return image_tensor, target

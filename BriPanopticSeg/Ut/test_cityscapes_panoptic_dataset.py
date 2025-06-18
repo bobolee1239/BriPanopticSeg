@@ -15,15 +15,16 @@ def build_category_table(categories: List[Dict[str, Any]]) -> Dict[int, Dict[str
         cat['id']: {
             'name': cat['name'],
             'color': tuple(cat['color']),
-            'isthing': cat.get('isthing', 1)
+            'isthing': cat.get('isthing', 1),
+            'trainId': trainId,
         }
-        for cat in categories
+        for trainId, cat in enumerate(categories)
     }
 
 def visualize_sample(
     image_tensor: Any,
     target: Dict[str, Any],
-    category_table: Dict[int, Dict[str, Any]],
+    category_table: List[Dict[str, Any]],
     sample_idx: int
 ) -> None:
     image_np = (image_tensor.permute(1, 2, 0).numpy() * 255).astype(np.uint8)
@@ -41,11 +42,7 @@ def visualize_sample(
         label_id = int(labels[i])
         box = boxes[i].astype(int)
 
-        cat_info = category_table.get(label_id, {
-            'name': f'id:{label_id}',
-            'color': (255, 255, 255),
-            'isthing': 1
-        })
+        cat_info = category_table[label_id]
 
         name = cat_info['name']
         color = [c / 255.0 for c in cat_info['color']]
@@ -90,12 +87,13 @@ def test_cityscapes_dataset() -> None:
         panoptic_json = json.load(f)
 
     annotations = panoptic_json['annotations']
-    category_table = build_category_table(panoptic_json['categories'])
+    category_table = panoptic_json['categories']
 
     dataset = CityscapesPanopticDataset(
         root_img_dir=d_imgs,
         root_panoptic_dir=d_panoptic_imgs,
         panoptic_annotations=annotations,
+        category_table=build_category_table(category_table),
         transform=None
     )
 

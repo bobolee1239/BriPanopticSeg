@@ -71,7 +71,11 @@ class PanopticFPN(nn.Module):
 
         sem_gt_tensor = torch.stack(sem_gt_list).long()
         # [B, H, W]
-
+        sem_gt_tensor = torch.nn.functional.interpolate(
+                            sem_gt_tensor.unsqueeze(1).float(), 
+                            size=sem_logits.shape[-2:], 
+                            mode='nearest'
+                            ).squeeze(1).long()
         loss_sem_seg = F.cross_entropy(sem_logits, sem_gt_tensor)
         # scalar loss
 

@@ -65,6 +65,22 @@ def build_sem_seg_from_masks(masks, labels, height, width):
 
     return sem_seg
 
+def extract_bounding_box(mask: np.ndarray) -> np.ndarray:
+    """Extract the bounding box of a mask.
+
+    :param mask: HxW numpy array
+    :return: bounding box
+    """
+    pos = np.where(mask)  # TODO: Check if np.nonzero can be used instead
+
+    if not (pos[0].size or pos[1].size):
+        return np.array([0, 0, 0, 0])
+
+    xmin = np.min(pos[1])
+    xmax = np.max(pos[1]) + 1
+    ymin = np.min(pos[0])
+    ymax = np.max(pos[0]) + 1
+    return np.array([xmin, ymin, xmax, ymax])
 
 class CityscapesPanopticDataset(Dataset):
     """
@@ -85,6 +101,7 @@ class CityscapesPanopticDataset(Dataset):
         panoptic_annotations: List[Dict[str, Any]],
         category_table      : Dict[int, Dict[str, Any]],
         transform: Optional[Callable] = None,
+        cropFcn             : Optional[Callable]=None,
     ) -> None:
         self._root_img_dir = root_img_dir
         self._root_panoptic_dir = root_panoptic_dir
@@ -92,6 +109,7 @@ class CityscapesPanopticDataset(Dataset):
         self._transform = transform
 
         self._category_table = category_table
+        self._cropFcn = cropFcn
         return
 
     def __len__(self) -> int:
@@ -124,19 +142,25 @@ class CityscapesPanopticDataset(Dataset):
             masks = target['masks'].numpy()
             boxes = target['boxes'].numpy()
             labels = target['labels'].tolist()
-            result: Dict[str, Any] = self._transform(image=image_np,
+            result = self._transform(image=image_np,
                                                      masks=masks,
-                                                     bboxes=boxes,
-                                                     category_ids=labels,
                                                      )
+            result = self._cropFcn(image=result['image'],
+                                   masks=result['masks'],
+                                   )
+            keepit = [np.any(m) for m in result['masks']]
+            masks = [result['masks'][n] for n in range(len(keepit)) if keepit[n]]
+            boxes = [extract_bounding_box(mask) for mask in masks]
+            labels = [target['labels'][n] for n in range(len(keepit)) if keepit[n]]
+
             image_tensor = (
                 torch.from_numpy(result['image']).permute(2, 0, 1).float() 
                     / 255.0
                 )
             target = {
-                'masks': torch.as_tensor(result['masks'], dtype=torch.uint8),
-                'boxes': torch.as_tensor(result['bboxes'], dtype=torch.float32),
-                'labels': torch.as_tensor(result['category_ids'], dtype=torch.int64)
+                'masks': torch.as_tensor(np.array(masks), dtype=torch.uint8),
+                'boxes': torch.as_tensor(np.array(boxes), dtype=torch.float32),
+                'labels': torch.as_tensor(np.array(labels), dtype=torch.int64)
             }
         else:
             image_tensor = torch.from_numpy(np.array(image)).permute(2, 0, 1).float() / 255.0

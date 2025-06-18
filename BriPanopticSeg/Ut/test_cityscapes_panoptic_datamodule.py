@@ -7,6 +7,7 @@ import matplotlib.patches as patches
 from PIL import Image
 from typing import Dict, Any, List, Tuple
 
+import albumentations as A
 from BriPanopticSeg.Data.CityscapesPanopticDataset import CityscapesPanopticDataset
 from BriPanopticSeg.Data.PanopticDataModule import PanopticDataModule
 
@@ -90,12 +91,18 @@ def test_cityscapes_datamodule() -> None:
     annotations = panoptic_json['annotations']
     category_table = panoptic_json['categories']
 
+    transform = A.Compose([
+                    A.HorizontalFlip(p=0.5),
+                ],
+                )
+    cropFcn = A.RandomCrop(height=512, width=1024)
     dataset = CityscapesPanopticDataset(
         root_img_dir=d_imgs,
         root_panoptic_dir=d_panoptic_imgs,
         panoptic_annotations=annotations,
         category_table=build_category_table(panoptic_json['categories']),
-        transform=None
+        transform=transform,
+        cropFcn=cropFcn,
     )
 
     datamodule = PanopticDataModule(train_dataset=dataset,

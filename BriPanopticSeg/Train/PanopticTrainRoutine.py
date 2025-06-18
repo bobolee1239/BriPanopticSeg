@@ -17,7 +17,7 @@ class PanopticTrainRoutine(pl.LightningModule):
         self,
         model: nn.Module,
         learning_rate: float = 1e-4,
-        category_table: Dict[int, Dict[str, Union[str, List[int], bool]]] = None,
+        category_table: List[Dict[str, Union[str, List[int], bool]]] = None,
         visualize_every_n: int = 50
     ) -> None:
         super().__init__()
@@ -63,7 +63,7 @@ class PanopticTrainRoutine(pl.LightningModule):
         labels = prediction['labels'].cpu().tolist()
         boxes = prediction['boxes'].cpu() if 'boxes' in prediction else None
 
-        colors = [tuple(self.category_table.get(lbl, {}).get("color", [255, 255, 255])) for lbl in labels]
+        colors = [tuple(self.category_table[lbl].get("color", [255, 255, 255])) for lbl in labels]
         mask_tensor = masks.squeeze(1).cpu()
 
         vis = draw_segmentation_masks(img, mask_tensor, alpha=0.6, colors=colors)
@@ -73,8 +73,8 @@ class PanopticTrainRoutine(pl.LightningModule):
         fig, ax = plt.subplots(1)
         ax.imshow(vis)
         for i, label in enumerate(labels):
-            name = self.category_table.get(label, {}).get("name", f"id:{label}")
-            color = tuple(np.array(self.category_table.get(label, {}).get("color", [255, 255, 255])) / 255.0)
+            name = self.category_table[label].get("name", f"id:{label}")
+            color = tuple(np.array(self.category_table[label].get("color", [255, 255, 255])) / 255.0)
 
             if boxes is not None:
                 x1, y1, x2, y2 = boxes[i].tolist()

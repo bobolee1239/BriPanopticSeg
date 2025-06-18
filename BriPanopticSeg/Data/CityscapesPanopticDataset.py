@@ -165,7 +165,7 @@ class CityscapesPanopticDataset(Dataset):
         else:
             image_tensor = torch.from_numpy(np.array(image)).permute(2, 0, 1).float() / 255.0
 
-        height, width = target['masks'].shape[1:]
+        height, width = image_tensor.shape[1:]
         sem_seg = build_sem_seg_from_masks(target['masks'], 
                                            target['labels'], 
                                            height,

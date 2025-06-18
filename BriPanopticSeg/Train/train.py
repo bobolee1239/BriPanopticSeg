@@ -2,6 +2,7 @@
 import os
 import json
 import torch
+import albumentations as A
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
@@ -34,11 +35,18 @@ def create_dataset(setname: str,
     with open(f_json) as f:
         panoptic_json = json.load(f)
     annotations = panoptic_json['annotations']
+
+    transform = A.Compose([
+                    A.HorizontalFlip(p=0.5),
+                ],
+                )
+    cropFcn = A.RandomCrop(height=512, width=1024)
     return CityscapesPanopticDataset(
                 root_img_dir=d_imgs,
                 root_panoptic_dir=d_panoptic_imgs,
                 panoptic_annotations=annotations,
-                transform=None,
+                transform=transform,
+                cropFcn=cropFcn,
                 category_table=category_table,
                 )
 
@@ -66,18 +74,18 @@ def main() -> int:
     num_stuff = sum(1 for id, info in category_table.items() if info.get("isthing", 1) == 0)
     print(f'[I] #things={num_things}, #stuff={num_stuff}')
     # === Model and Modules ===
-    model = PanopticFPN(num_thing_classes=num_things,
-                        num_stuff_classes=num_stuff,
+    model = PanopticFPN(num_classes=num_things+num_stuff,
                         )
     datamodule = create_datamodule(batchsize=4,
                                    num_workers=8,
+                                   category_table=category_table,
                                    )
     
     lr = 1e-4
     train_routine = PanopticTrainRoutine(
                         model=model,
                         learning_rate=lr,
-                        category_table=category_table,
+                        category_table=panoptic_json['categories'],
                         visualize_every_n=50
                         )
     # === Logging & Checkpoints ===

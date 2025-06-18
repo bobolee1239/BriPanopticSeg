@@ -27,8 +27,7 @@ class SemanticHead(nn.Module):
 class PanopticFPN(nn.Module):
     def __init__(
         self,
-        num_thing_classes: int,
-        num_stuff_classes: int
+        num_classes: int,
     ) -> None:
         super().__init__()
 
@@ -45,12 +44,13 @@ class PanopticFPN(nn.Module):
 
         self.mask_rcnn = MaskRCNN(
             self.backbone,
-            num_classes=num_thing_classes,
+            num_classes=num_classes,
             min_size=512,
             max_size=1024
         )
 
-        self.semantic_head = SemanticHead(in_channels=256, num_classes=num_stuff_classes)
+        self.semantic_head = SemanticHead(in_channels=256, num_classes=num_classes)
+        return
 
     def forward(self, images: List[torch.Tensor], targets: Optional[List[Dict[str, torch.Tensor]]] = None
                 ) -> Union[Dict[str, torch.Tensor], Dict[str, Union[List, torch.Tensor]]]:

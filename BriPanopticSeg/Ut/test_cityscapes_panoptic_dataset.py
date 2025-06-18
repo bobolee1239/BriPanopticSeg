@@ -106,6 +106,10 @@ def test_cityscapes_dataset() -> None:
     indices = random.sample(range(len(dataset)), 3)
     for idx in indices:
         img_tensor, target = dataset[idx]
+        for k,v in target.items():
+            print(f'[D] {k}: {v.shape}')
+        print('[D] ------')
+        import pdb; pdb.set_trace()
         visualize_sample(img_tensor, 
                          target, 
                          category_table, 

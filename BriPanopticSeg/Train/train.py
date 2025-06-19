@@ -76,7 +76,7 @@ def main() -> int:
     # === Model and Modules ===
     model = PanopticFPN(num_classes=num_things+num_stuff,
                         )
-    datamodule = create_datamodule(batchsize=4,
+    datamodule = create_datamodule(batchsize=16,
                                    num_workers=8,
                                    category_table=category_table,
                                    )
@@ -103,10 +103,10 @@ def main() -> int:
 
     # === Trainer ===
     trainer: pl.Trainer = pl.Trainer(
-        max_epochs=30,
+        max_epochs=300,
         logger=logger,
         callbacks=[checkpoint_cb, lr_monitor_cb],
-        log_every_n_steps=10,
+        log_every_n_steps=30,
         accelerator="gpu",
         devices=1
     )

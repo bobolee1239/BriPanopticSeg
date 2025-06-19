@@ -10,7 +10,8 @@ import matplotlib.patches as patches
 
 from typing import List, Dict, Union
 from torchvision.transforms.functional import to_pil_image
-from torchvision.utils import draw_segmentation_masks
+from torchvision.utils import draw_segmentation_masks, draw_bounding_boxes
+from torchvision.transforms.functional import to_pil_image
 
 class PanopticTrainRoutine(pl.LightningModule):
     def __init__(
@@ -34,6 +35,11 @@ class PanopticTrainRoutine(pl.LightningModule):
         images = batch['images']
         targets = batch['targets']
 
+        # Check for any target with no boxes
+        if any(t['boxes'].numel() == 0 for t in targets):
+            self.log("train/skipped_empty", 1.0, prog_bar=False, on_step=True)
+            return None
+
         loss_dict = self.model.forward_train(images, targets)
         total_loss = sum(loss_dict.values())
 
@@ -56,41 +62,102 @@ class PanopticTrainRoutine(pl.LightningModule):
                 vis_img = self._visualize_prediction(image, pred)
                 self.logger.experiment.add_image(f'val/panoptic_pred_{batch_idx}_{i}', vis_img, self.global_step)
 
+            sem_seg = outputs['sem_logits'].argmax(dim=1)  # [B, H, W]
+            for i in range(len(images)):
+                sem_img = self._visualize_semantic_segmentation(images[i], sem_seg[i])
+                self.logger.experiment.add_image(f'val/sem_pred_{batch_idx}_{i}', sem_img, self.global_step)
+        return
+
     def _visualize_prediction(self, image: torch.Tensor, prediction: Dict[str, torch.Tensor]) -> torch.Tensor:
-        # image: [3, H, W], normalized float tensor in [0, 1]
-        img = (image * 255).byte().cpu()
-        masks = prediction['masks'] > 0.5
+        # Convert image to [3, H, W] uint8
+        img = (image * 255).to(torch.uint8).cpu()
+        if img.shape[0] == 1:
+            img = img.expand(3, -1, -1)
+
+        masks = (prediction['masks'] > 0.5).squeeze(1).cpu()  # [N, H, W]
         labels = prediction['labels'].cpu().tolist()
-        boxes = prediction['boxes'].cpu() if 'boxes' in prediction else None
+        boxes = prediction.get('boxes', torch.empty((0, 4))).cpu()
 
+        # Build colors and label names
         colors = [tuple(self.category_table[lbl].get("color", [255, 255, 255])) for lbl in labels]
-        mask_tensor = masks.squeeze(1).cpu()
+        names = [self.category_table[lbl].get("name", str(lbl)) for lbl in labels]
+        isthing = [self.category_table[lbl].get("isthing", False) for lbl in labels]
 
-        vis = draw_segmentation_masks(img, mask_tensor, alpha=0.6, colors=colors)
-        vis = to_pil_image(vis)
+        # Split masks/labels/boxes by thing/stuff
+        thing_masks, thing_boxes, thing_labels, thing_colors = [], [], [], []
+        stuff_masks, stuff_colors = [], []
 
-        # Draw bounding boxes and labels
-        fig, ax = plt.subplots(1)
-        ax.imshow(vis)
-        for i, label in enumerate(labels):
-            name = self.category_table[label].get("name", f"id:{label}")
-            color = tuple(np.array(self.category_table[label].get("color", [255, 255, 255])) / 255.0)
+        for i, is_thing in enumerate(isthing):
+            if is_thing:
+                thing_masks.append(masks[i])
+                thing_boxes.append(boxes[i])
+                thing_labels.append(names[i])
+                thing_colors.append(colors[i])
+            else:
+                stuff_masks.append(masks[i])
+                stuff_colors.append(colors[i])
 
-            if boxes is not None:
-                x1, y1, x2, y2 = boxes[i].tolist()
-                rect = patches.Rectangle((x1, y1), x2 - x1, y2 - y1, linewidth=2, edgecolor=color, facecolor='none')
-                ax.add_patch(rect)
-                ax.text(x1, y1 - 5, name, fontsize=8, color=color, backgroundcolor='white')
+        # Draw stuff (segmentation only)
+        if len(stuff_masks) > 0:
+            img = draw_segmentation_masks(
+                img,
+                masks=torch.stack(stuff_masks),
+                colors=stuff_colors,
+                alpha=0.5
+            )
 
-        ax.axis("off")
-        buf = io.BytesIO()
-        plt.savefig(buf, format='png')
-        buf.seek(0)
-        img_arr = np.frombuffer(buf.getvalue(), dtype=np.uint8)
-        img = plt.imread(buf, format='png')
-        plt.close(fig)
-        img_tensor = torch.tensor(img).permute(2, 0, 1).float() / 255.0
-        return img_tensor
+        # Draw things (segmentation + boxes + labels)
+        if len(thing_masks) > 0:
+            img = draw_segmentation_masks(
+                img,
+                masks=torch.stack(thing_masks),
+                colors=thing_colors,
+                alpha=0.5
+            )
+            img = draw_bounding_boxes(
+                img,
+                boxes=torch.stack(thing_boxes).int(),
+                labels=thing_labels,
+                colors=thing_colors,
+                font_size=16,
+                width=2
+            )
+
+        return img.float() / 255.0
+
+    def _visualize_semantic_segmentation(self, image: torch.Tensor, sem_pred: torch.Tensor) -> torch.Tensor:
+        """
+        image: [3, H, W] float tensor in [0, 1]
+        sem_pred: [H', W'] long tensor with class indices
+        """
+        H, W = image.shape[-2:]
+        sem_pred = sem_pred.unsqueeze(0).unsqueeze(0).float()  # [1, 1, H', W']
+        sem_pred = F.interpolate(sem_pred, size=(H, W), mode='nearest').squeeze().long()  # [H, W]
+
+        img = (image * 255).to(torch.uint8).cpu()
+        if img.shape[0] == 1:
+            img = img.expand(3, -1, -1)
+
+        sem_pred = sem_pred.cpu()
+
+        # Extract unique classes
+        unique_classes = torch.unique(sem_pred)
+        masks = [(sem_pred == class_id) for class_id in unique_classes]
+
+        # Pick colors for each class
+        colors = [
+            tuple(self.category_table[class_id.item()].get("color", [255, 255, 255]))
+            for class_id in unique_classes
+        ]
+
+        vis = draw_segmentation_masks(
+            img,
+            masks=torch.stack(masks),
+            colors=colors,
+            alpha=0.5
+        )
+
+        return vis.float() / 255.0
 
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=self.learning_rate)

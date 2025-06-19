@@ -130,10 +130,6 @@ class PanopticTrainRoutine(pl.LightningModule):
         image: [3, H, W] float tensor in [0, 1]
         sem_pred: [H', W'] long tensor with class indices
         """
-        H, W = image.shape[-2:]
-        sem_pred = sem_pred.unsqueeze(0).unsqueeze(0).float()  # [1, 1, H', W']
-        sem_pred = F.interpolate(sem_pred, size=(H, W), mode='nearest').squeeze().long()  # [H, W]
-
         img = (image * 255).to(torch.uint8).cpu()
         if img.shape[0] == 1:
             img = img.expand(3, -1, -1)

@@ -5,24 +5,42 @@ from torchvision.models.detection import MaskRCNN
 from torchvision.models.detection.backbone_utils import resnet_fpn_backbone
 from torchvision.models import ResNet50_Weights
 from typing import List, Dict, Optional, Union
+from torchvision.ops import nms
 
 
 class SemanticHead(nn.Module):
-    def __init__(self, in_channels: int, num_classes: int) -> None:
+    def __init__(self, in_channels_list: List[int], num_classes: int) -> None:
         super().__init__()
-        self.head = nn.Sequential(
-            nn.Conv2d(in_channels, 256, kernel_size=3, padding=1),
-            # [B, C, H/4, W/4] -> [B, 256, H/4, W/4]
+        self.inner_blocks = nn.ModuleDict()
+        self.layer_blocks = nn.ModuleDict()
+
+        # FPN levels: P2, P3, P4, P5
+        # Corresponding spatial resolution relative to original image (H, W):
+        #   P2: H/4,  W/4
+        #   P3: H/8,  W/8
+        #   P4: H/16, W/16
+        #   P5: H/32, W/32
+        for idx, level in enumerate(['0', '1', '2', '3']):
+            self.inner_blocks[level] = nn.Conv2d(in_channels_list[idx], 128, kernel_size=1)
+            self.layer_blocks[level] = nn.Conv2d(128, 128, kernel_size=3, padding=1)
+
+        self.output_head = nn.Sequential(
+            nn.Conv2d(128, 128, kernel_size=3, padding=1),
             nn.ReLU(inplace=True),
-            nn.Conv2d(256, num_classes, kernel_size=1)
-            # [B, 256, H/4, W/4] -> [B, num_classes, H/4, W/4]
+            nn.Conv2d(128, num_classes, kernel_size=1)
         )
 
-    def forward(self, features: Dict[str, torch.Tensor]) -> torch.Tensor:
-        x = features['0']
-        # [B, C, H/4, W/4] from P2 level of FPN (highest resolution)
-        return self.head(x)
-        # [B, num_classes, H/4, W/4]
+    def forward(self, features: Dict[str, torch.Tensor], image_shape: List[int]) -> torch.Tensor:
+        # Start from the lowest resolution (P5) and upsample step-by-step
+        x = self.inner_blocks['3'](features['3'])
+        for level in ['2', '1', '0']:
+            inner_lateral = self.inner_blocks[level](features[level])
+            x = F.interpolate(x, size=inner_lateral.shape[-2:], mode='nearest') + inner_lateral
+        x = self.layer_blocks['0'](x)  # refine with conv
+
+        # Upsample to original resolution
+        x = F.interpolate(x, size=image_shape, mode='bilinear', align_corners=False)
+        return self.output_head(x)
 
 class PanopticFPN(nn.Module):
     def __init__(
@@ -49,7 +67,8 @@ class PanopticFPN(nn.Module):
             max_size=1024
         )
 
-        self.semantic_head = SemanticHead(in_channels=256, num_classes=num_classes)
+        in_channels_list = [256, 512, 1024, 2048]  # channels for P2-P5 from ResNet50
+        self.semantic_head = SemanticHead(in_channels_list=in_channels_list, num_classes=num_classes)
         return
 
     def forward(self, images: List[torch.Tensor], targets: Optional[List[Dict[str, torch.Tensor]]] = None
@@ -63,26 +82,22 @@ class PanopticFPN(nn.Module):
         features = self.backbone.body(torch.stack(images))
         # [B, 3, H, W] -> FPN features
 
-        sem_logits = self.semantic_head(features)
+        image_shape = images[0].shape[-2:]
+        sem_logits = self.semantic_head(features, image_shape)
         # [B, num_stuff_classes, H/4, W/4]
 
         sem_gt_list = [t['sem_seg'] for t in targets]
         # list of [H, W] int64 label maps
 
         sem_gt_tensor = torch.stack(sem_gt_list).long()
-        # [B, H, W]
-        sem_gt_tensor = torch.nn.functional.interpolate(
-                            sem_gt_tensor.unsqueeze(1).float(), 
-                            size=sem_logits.shape[-2:], 
-                            mode='nearest'
-                            ).squeeze(1).long()
         loss_sem_seg = F.cross_entropy(sem_logits, sem_gt_tensor)
         # scalar loss
 
         loss_dict = self.mask_rcnn(images, targets)
         # Dict[str, Tensor] of losses from instance head
 
-        loss_dict['loss_sem_seg'] = loss_sem_seg
+        _lambda = 0.5
+        loss_dict['loss_sem_seg'] = _lambda*loss_sem_seg
         return loss_dict
 
     def forward_infer(self, images: List[torch.Tensor]) -> Dict[str, Union[List, torch.Tensor]]:
@@ -90,8 +105,9 @@ class PanopticFPN(nn.Module):
             features = self.backbone.body(torch.stack(images))
             # [B, 3, H, W] -> FPN features
 
-            sem_logits = self.semantic_head(features)
-            # [B, num_stuff_classes, H/4, W/4]
+            image_shape = images[0].shape[-2:]
+            sem_logits = self.semantic_head(features, image_shape)
+            # [B, num_stuff_classes, H, W]
 
             instance_preds = self.mask_rcnn(images)
             # List[Dict[str, Tensor]]
@@ -100,3 +116,28 @@ class PanopticFPN(nn.Module):
             'instances': instance_preds,  # List[Dict[str, Tensor]]
             'sem_logits': sem_logits      # [B, num_stuff_classes, H/4, W/4]
         }
+
+    def fuse_predictions(self, sem_logits: torch.Tensor, instance_preds: List[Dict[str, torch.Tensor]], iou_thresh: float = 0.5) -> List[torch.Tensor]:
+        """
+        Fuse semantic logits and instance predictions into one per-pixel label map per image.
+        Apply NMS to instance predictions before fusion.
+        """
+        sem_seg = sem_logits.argmax(dim=1)  # [B, H, W]
+        fused_preds = []
+        for sem, inst in zip(sem_seg, instance_preds):
+            fused = torch.full_like(sem, fill_value=255)  # init with void label
+            masks = inst['masks'] > 0.5
+            labels = inst['labels']
+            scores = inst['scores']
+            boxes = inst['boxes']
+
+            # Apply NMS
+            keep = nms(boxes, scores, iou_thresh)
+            masks = masks[keep]
+            labels = labels[keep]
+
+            for mask, label in zip(masks, labels):
+                fused[mask.squeeze(0)] = label
+            fused[fused == 255] = sem[fused == 255]
+            fused_preds.append(fused)
+        return fused_preds

@@ -19,6 +19,15 @@ This project implements a **Panoptic Segmentation** pipeline based on the paper 
 * ✅ NMS applied to instance predictions during inference
 * ✅ Fine-grained control of visualization frequency
 
+## 🖼 Example Visualization (Pretrained Output)
+
+Below is a sample prediction from our `PanopticFPN` model on the Cityscapes dataset.
+
+> ⚠️ **Note**: The goal of this repository is to provide a clean and reproducible training pipeline for Panoptic Segmentation for Cityscapes Dataset — not to fine-tune the best model.  
+> Therefore, the following example is generated **before any fine-tuning**.  
+> Even so, the model is already producing reasonable predictions out-of-the-box.
+
+![Panoptic FPN Example](./assets/example1.png)
 
 ## 📂 Dataset Preparation: Cityscapes + Panoptic Annotations
 

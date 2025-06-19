@@ -169,23 +169,72 @@ class PanopticTrainRoutine(pl.LightningModule):
         instance_labels = instance_labels[keep]
 
         sem_unique = torch.unique(sem_pred)
-        sem_masks = [(sem_pred == class_id) for class_id in sem_unique]
-        sem_colors = [tuple(self.category_table[class_id.item()].get("color", [255, 255, 255])) for class_id in sem_unique]
+        stuff_masks, stuff_boxes, stuff_labels, stuff_colors = [], [], [], []
 
-        img = draw_segmentation_masks(
-            img,
-            masks=torch.stack(sem_masks),
-            colors=sem_colors,
-            alpha=0.4
-        )
+        for class_id in sem_unique:
+            class_id_int = class_id.item()
+            mask = sem_pred == class_id
+            if mask.sum() == 0:
+                continue
 
-        inst_colors = [tuple(self.category_table[lbl.item()].get("color", [255, 255, 255])) for lbl in instance_labels]
-        if instance_masks.numel() > 0:
+            # Skip if a thing class already predicted in instance head
+            if any((lbl.item() == class_id_int) and self.category_table[lbl.item()].get("isthing", False) for lbl in instance_labels):
+                continue
+            stuff_masks.append(mask)
+            stuff_labels.append(self.category_table[class_id_int].get("name", str(class_id_int)))
+            stuff_colors.append(tuple(self.category_table[class_id_int].get("color", [255, 255, 255])))
+
+            y_indices, x_indices = torch.where(mask)
+            if len(x_indices) > 0 and len(y_indices) > 0:
+                cx = int(x_indices.float().mean())
+                cy = int(y_indices.float().mean())
+                box = torch.tensor([cx - 1, cy - 1, cx + 1, cy + 1])
+            else:
+                box = torch.tensor([0, 0, 0, 0])
+            stuff_boxes.append(box)
+
+        if stuff_masks:
+            img = draw_segmentation_masks(
+                img,
+                masks=torch.stack(stuff_masks),
+                colors=stuff_colors,
+                alpha=0.5
+            )
+            img = draw_bounding_boxes(
+                img,
+                boxes=torch.stack(stuff_boxes).int(),
+                labels=stuff_labels,
+                colors=stuff_colors,
+                font_size=16,
+                width=1
+            )
+
+        thing_indices = [
+            i for i, lbl in enumerate(instance_labels)
+            if self.category_table[lbl.item()].get("isthing", False)
+        ]
+
+        if thing_indices:
+            instance_masks = instance_masks[thing_indices]
+            instance_boxes = instance_boxes[thing_indices]
+            instance_labels = instance_labels[thing_indices]
+
+            inst_colors = [tuple(self.category_table[lbl.item()].get("color", [255, 255, 255])) for lbl in instance_labels]
+            inst_labels = [self.category_table[lbl.item()].get("name", str(lbl.item())) for lbl in instance_labels]
+
             img = draw_segmentation_masks(
                 img,
                 masks=instance_masks,
                 colors=inst_colors,
                 alpha=0.6
+            )
+            img = draw_bounding_boxes(
+                img,
+                boxes=instance_boxes.int(),
+                labels=inst_labels,
+                colors=inst_colors,
+                font_size=16,
+                width=2
             )
 
         return img.float() / 255.0

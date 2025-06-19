@@ -103,7 +103,7 @@ def main() -> int:
 
     # === Trainer ===
     trainer: pl.Trainer = pl.Trainer(
-        max_epochs=300,
+        max_epochs=100,
         logger=logger,
         callbacks=[checkpoint_cb, lr_monitor_cb],
         log_every_n_steps=30,

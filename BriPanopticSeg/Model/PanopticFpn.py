@@ -5,7 +5,6 @@ from torchvision.models.detection import MaskRCNN
 from torchvision.models.detection.backbone_utils import resnet_fpn_backbone
 from torchvision.models import ResNet50_Weights
 from typing import List, Dict, Optional, Union
-from torchvision.ops import nms
 
 
 class SemanticHead(nn.Module):
@@ -116,28 +115,3 @@ class PanopticFPN(nn.Module):
             'instances': instance_preds,  # List[Dict[str, Tensor]]
             'sem_logits': sem_logits      # [B, num_stuff_classes, H/4, W/4]
         }
-
-    def fuse_predictions(self, sem_logits: torch.Tensor, instance_preds: List[Dict[str, torch.Tensor]], iou_thresh: float = 0.5) -> List[torch.Tensor]:
-        """
-        Fuse semantic logits and instance predictions into one per-pixel label map per image.
-        Apply NMS to instance predictions before fusion.
-        """
-        sem_seg = sem_logits.argmax(dim=1)  # [B, H, W]
-        fused_preds = []
-        for sem, inst in zip(sem_seg, instance_preds):
-            fused = torch.full_like(sem, fill_value=255)  # init with void label
-            masks = inst['masks'] > 0.5
-            labels = inst['labels']
-            scores = inst['scores']
-            boxes = inst['boxes']
-
-            # Apply NMS
-            keep = nms(boxes, scores, iou_thresh)
-            masks = masks[keep]
-            labels = labels[keep]
-
-            for mask, label in zip(masks, labels):
-                fused[mask.squeeze(0)] = label
-            fused[fused == 255] = sem[fused == 255]
-            fused_preds.append(fused)
-        return fused_preds

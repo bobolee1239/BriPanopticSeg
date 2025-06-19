@@ -8,10 +8,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 
-from typing import List, Dict, Union
-from torchvision.transforms.functional import to_pil_image
 from torchvision.utils import draw_segmentation_masks, draw_bounding_boxes
-from torchvision.transforms.functional import to_pil_image
+from torchvision.ops import nms
+from typing import List, Dict, Union
 
 class PanopticTrainRoutine(pl.LightningModule):
     def __init__(
@@ -51,21 +50,19 @@ class PanopticTrainRoutine(pl.LightningModule):
 
     def validation_step(self, batch: Dict[str, Union[List[torch.Tensor], List[Dict[str, torch.Tensor]]]], batch_idx: int) -> None:
         images = batch['images']
-        targets = batch['targets']
-        outputs = self.model.forward_infer(images)
-
-        # self.log('val/num_preds', float(sum(len(p['labels']) for p in outputs)), on_step=False, on_epoch=True)
-
-        # import pdb; pdb.set_trace()
+        with torch.no_grad():
+            outputs = self.model.forward_infer(images)
         if self.category_table and batch_idx % self.visualize_every_n == 0:
+            sem_seg = outputs['sem_logits'].argmax(dim=1)  # [B, H, W]
             for i, (image, pred) in enumerate(zip(images, outputs['instances'])):
                 vis_img = self._visualize_prediction(image, pred)
-                self.logger.experiment.add_image(f'val/panoptic_pred_{batch_idx}_{i}', vis_img, self.global_step)
+                self.logger.experiment.add_image(f'val/instance_pred_{batch_idx}_{i}', vis_img, self.global_step)
 
-            sem_seg = outputs['sem_logits'].argmax(dim=1)  # [B, H, W]
-            for i in range(len(images)):
-                sem_img = self._visualize_semantic_segmentation(images[i], sem_seg[i])
+                sem_img = self._visualize_semantic_segmentation(image, sem_seg[i])
                 self.logger.experiment.add_image(f'val/sem_pred_{batch_idx}_{i}', sem_img, self.global_step)
+
+                fused_img = self._fuse_panoptic_prediction(image, pred, sem_seg[i])
+                self.logger.experiment.add_image(f'val/panoptic_{batch_idx}_{i}', fused_img, self.global_step)
         return
 
     def _visualize_prediction(self, image: torch.Tensor, prediction: Dict[str, torch.Tensor]) -> torch.Tensor:
@@ -155,6 +152,43 @@ class PanopticTrainRoutine(pl.LightningModule):
 
         return vis.float() / 255.0
 
+    def _fuse_panoptic_prediction(self, image: torch.Tensor, instance_pred: Dict[str, torch.Tensor], sem_pred: torch.Tensor) -> torch.Tensor:
+        img = (image * 255).to(torch.uint8).cpu()
+        if img.shape[0] == 1:
+            img = img.expand(3, -1, -1)
+
+        sem_pred = sem_pred.cpu()
+        instance_masks = (instance_pred['masks'] > 0.5).squeeze(1).cpu()
+        instance_boxes = instance_pred['boxes'].cpu()
+        instance_scores = instance_pred['scores'].cpu()
+        instance_labels = instance_pred['labels'].cpu()
+
+        keep = nms(instance_boxes, instance_scores, iou_threshold=0.5)
+        instance_masks = instance_masks[keep]
+        instance_boxes = instance_boxes[keep]
+        instance_labels = instance_labels[keep]
+
+        sem_unique = torch.unique(sem_pred)
+        sem_masks = [(sem_pred == class_id) for class_id in sem_unique]
+        sem_colors = [tuple(self.category_table[class_id.item()].get("color", [255, 255, 255])) for class_id in sem_unique]
+
+        img = draw_segmentation_masks(
+            img,
+            masks=torch.stack(sem_masks),
+            colors=sem_colors,
+            alpha=0.4
+        )
+
+        inst_colors = [tuple(self.category_table[lbl.item()].get("color", [255, 255, 255])) for lbl in instance_labels]
+        if instance_masks.numel() > 0:
+            img = draw_segmentation_masks(
+                img,
+                masks=instance_masks,
+                colors=inst_colors,
+                alpha=0.6
+            )
+
+        return img.float() / 255.0
+
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=self.learning_rate)
-

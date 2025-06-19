@@ -240,4 +240,13 @@ class PanopticTrainRoutine(pl.LightningModule):
         return img.float() / 255.0
 
     def configure_optimizers(self):
-        return torch.optim.Adam(self.parameters(), lr=self.learning_rate)
+        optimizer = torch.optim.Adam(
+                        self.parameters(), 
+                        lr=self.learning_rate, 
+                        weight_decay=1e-4,
+                        )
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                        optimizer, 
+                        T_max=50,
+                        )
+        return [optimizer], [scheduler]

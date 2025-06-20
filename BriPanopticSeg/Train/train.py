@@ -144,6 +144,7 @@ def main(args: Any) -> int:
     # === Trainer ===
     trainer: pl.Trainer = pl.Trainer(
         precision=16,
+        gradient_clip_val=1.0,
         max_epochs=n_epochs,
         logger=logger,
         callbacks=[checkpoint_cb, lr_monitor_cb],

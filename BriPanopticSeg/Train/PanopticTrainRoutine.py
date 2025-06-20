@@ -7,6 +7,7 @@ import pytorch_lightning as pl
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
+import torch_optimizer as optim
 
 from torchvision.utils import draw_segmentation_masks, draw_bounding_boxes
 from torchvision.ops import nms
@@ -240,11 +241,13 @@ class PanopticTrainRoutine(pl.LightningModule):
         return img.float() / 255.0
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(
+        base_optim = torch.optim.AdamW(
                         self.parameters(), 
                         lr=self.learning_rate, 
                         weight_decay=1e-4,
                         )
+        # optimizer = optim.Lookahead(base_optim)
+        optimizer = base_optim
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
                         optimizer, 
                         T_max=50,

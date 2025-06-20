@@ -89,7 +89,8 @@ class PanopticFPN(nn.Module):
         # list of [H, W] int64 label maps
 
         sem_gt_tensor = torch.stack(sem_gt_list).long()
-        loss_sem_seg = F.cross_entropy(sem_logits, sem_gt_tensor)
+        # loss_sem_seg = F.cross_entropy(sem_logits, sem_gt_tensor)
+        loss_sem_seg = F.cross_entropy(sem_logits, sem_gt_tensor, label_smoothing=0.1)
         # scalar loss
 
         loss_dict = self.mask_rcnn(images, targets)
